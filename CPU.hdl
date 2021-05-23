@@ -1,0 +1,83 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Central Processing unit (CPU).
+ * Consists of an ALU and a set of registers, designed to fetch and 
+ * execute instructions written in the Hack machine language.
+ * In particular, the ALU executes the inputted instruction according
+ * to the Hack machine language specification, as follows. 
+ * The D and A in the language specification refer to CPU-resident registers,
+ * while M refers to the memory register addressed by A, i.e. to Memory[A].
+ * The inM input holds the value of this register. If the current instruction 
+ * needs to write a value to M, the value is placed in outM, the address 
+ * of the target register is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM=0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time unit. If reset == 1, then the 
+ * CPU jumps to address 0 (i.e. sets pc = 0 in next time unit) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current program
+                         // (reset == 1) or continue executing the current
+                         // program (reset == 0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write into M? 
+        addressM[15],    // RAM address (of M)
+        pc[15];          // ROM address (of next instruction)
+
+    PARTS:
+    Not(in=instruction[15], out=AIns);
+    Not(in=AIns, out=CIns);  //CIns is singling out  instruction[15] opcode
+    
+    And(a=CIns, b=instruction[5], out=ALUtoA);    //instruction[5] is d1 which signifies if A register is needed as destination
+    Mux16(a=instruction, b=ALUout, sel=ALUtoA, out=Aregin);//aregin means A register input which is taken from the ouput of ALU and ALUtoA decides it
+    
+    Or(a=AIns, b=ALUtoA, out=loadA);    // If it is A instruction or if it is ALUtoA is 1(meaning destination nits contain A), then it will set loadA to 1
+    ARegister(in=Aregin, load=loadA, out=Aout); // Load A register depending on LoadA
+    
+    Mux16(a=Aout, b=inM, sel=instruction[12], out=AMout);   //instruction 12 is "a" from comp bits which loads qither A or M depending on a or instruction[12], Aout is A register and inM is M value input  (M = contents of RAM[A])
+
+    And(a=CIns, b=instruction[4], out=loadD); // if instruction is C instruction and instruction[4] represnets D register in dest bits of C-instruction, 
+    //when both are true loadD will be set to 1 meaning D register will be assigned the ALU OUtput
+    DRegister(in=ALUout, load=loadD, out=Dout);    // Setting the D register to contain output of ALU
+    
+
+    //the comp bits c1,c2,c3,c4,c5,c6 are sent to ALU as is. Dout will load D register and AMout will load either A or M register 
+    //depending on dest bits ouALUout is the ouput ofALU and zr denotes if out==0 and ng=1 if out<0
+    ALU(x=Dout, y=AMout, zx=instruction[11], nx=instruction[10], zy=instruction[9],ny=instruction[8], f=instruction[7],no=instruction[6], out=ALUout, zr=ZRout, ng=NGout);
+    
+    
+    Or16(a=false, b=Aout, out[0..14]=addressM); // this line is basicaly saying out[0..14]=address or addressM stores value in A register which is Aout
+    Or16(a=false, b=ALUout, out=outM); //Same thing here saying outM=ALUout using Or16 gate which acts as a decoy so that it can assign the values
+    And(a=CIns, b=instruction[3], out=writeM); // writeM is a boolean which specifies if M value needs to be rewritten or not
+    
+    And(a=ZRout, b=instruction[1], out=jeq); //JEQ is when ALUout == 0 and zrout is 1 when ALU output is eeual to 1
+    And(a=NGout, b=instruction[2], out=jlt);    //JLT is ALUout<0 and Ngout is 1 if Alu output <0 thus jlt=1 when both what the user wants and the alu ouput is the same.
+    //Whenever j2instruction[1] is 1, the condition will always include if out==0 and maybe something else if other bits are not zero ,joined with or gate
+    //Whenever j1instruction[2] is 1, the condition will always include if out<0 and maybe something else if other bits are not zero ,joined with or gate 
+    //Whenever j3instruction[0] is 1, the condition will always include if out>0 and maybe something else if other bits are not zero ,joined with or gate 
+    Or(a=ZRout, b=NGout, out=zeroOrNeg); //this zeroorNeg is 1 when ALUout is equal to zero or is negative.
+    Not(in=zeroOrNeg, out=positive);     // thi positive is 1 if ALUout>0 menaing it is not(ALUout is equal to zero or is negative) or not(out==0 and out<0)
+    And(a=positive, b=instruction[0], out=jgt); //JGT is when ALUout>0  so it is not negative meaning it out!=0 and out!<0
+    Or(a=jeq, b=jlt, out=jle); //JLE is 1 ALUout<=0 meaning it satisifies either jeq(out==0) or jlt(out<0)
+    Or(a=jle, b=jgt, out=jumpToA);  // this is basically sayin if either ALUout<=0 or ALUout>0 jump to whatever contains in A register which is jumpToA
+    // Do, know that if jump bits are 111 meaning JMP it will do an unconditional jump because all numbers are aither positive(jgt) or zeroOrNegative(jle)
+    // meaning when we check at any given point of time when jle and jgt, one of their conditions will satisify the jump statement
+    And(a=CIns, b=jumpToA, out=PCload); // if it is C instruction and we are allowed to jumpToA(set to 1) then the PCload will be set to 1
+    Not(in=PCload, out=PCinc);          //PCinc tells the Program Counter to increment instruction number and to load the next instruction and 
+    //PC load wil set to 0 when PCinc is 1 becuase we only increment when we do not need to jump to another instruction number
+    PC(in=Aout, inc=PCinc, load=PCload, reset=reset, out[0..14]=pc); //The reset will reset the Program Counter meaning it will go to instruction 0. 
+    //PC from the ouput section of the cjip will store the ROM address of the next instructioon
+}
